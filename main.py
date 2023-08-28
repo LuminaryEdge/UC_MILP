@@ -155,25 +155,41 @@ def add_constr_unit(var):
     UT = units.UT
     DT = units.DT
 
-    T = np.full((u,1),t)
-    G = np.squeeze(np.minimum(T,(UT - U0) * V0))
-    L = np.squeeze(np.minimum(T,(DT - S0) * (1 - V0)))
+    T = np.squeeze(np.full((1,u),t))
+    G = np.minimum(T,(UT - U0) * V0)
+    L = np.minimum(T,(DT - S0) * (1 - V0))
+
     
     # Generation Limits 1536
     model.addConstrs(p[j,k] >= Pmin[j] * v[j,k] for j in J for k in K) # (16)
     model.addConstrs(p[j,k] <= pmax[j,k] for j in J for k in K)
     model.addConstrs(pmax[j,k] >= 0 for j in J for k in K) # (17)
-    model.addConstrs(pmax[j,k] <= gp.quicksum(Pmax[j] * v[j,k]) for j in J for k in K) 
+    model.addConstrs(pmax[j,k] <= Pmax[j] * v[j,k] for j in J for k in K) 
     # Ramping Constraints 384 + 368 + 384
-    model.addConstrs(pmax[j,k] <= gp.quicksum(p[j,k-1] + RU[j] * v[j,k-1] + SU[j] * (v[j,k] - v[j,k-1]) + Pmax[j] * (1 - v[j,k])) for j in J for k in K[1:]) # (18)
-    model.addConstrs(pmax[j,0] <= gp.quicksum((p0[j] + RU[j] * V0[j] + SU[j] * (v[j,0] - V0[j]) + Pmax[j] * (1 - v[j,0])))for j in J)
-    model.addConstrs(pmax[j,k] <= gp.quicksum(Pmax[j] * v[j,k+1] + SD[j] * (v[j,k] - v[j,k+1])) for j in J for k in K[:-1]) # (19)
-    model.addConstrs(p[j,k-1] - p[j,k] <= gp.quicksum(RD[j] * v[j,k] + SD[j] * (v[j,k-1] - v[j,k]) + Pmax[j] * (1 - v[j,k-1])) for j in J for k in K[1:]) # (20)
-    model.addConstrs(gp.quicksum(p0[j] - p[j,0]) <= gp.quicksum(RD[j] * v[j,0] + SD[j] * (V0[j] - v[j,0]) + Pmax[j] * (1 - V0[j])) for j in J)
-    # Minimum Up and Down time Constrains 16(3504) + 
-    model.addConstrs(gp.quicksum(1 - v[j,k] for k in range(G[j])) == 0 for j in J)
-    model.addConstrs((gp.quicksum(v[j,n] for n in range(k, k + UT[j])) >= gp.quicksum(UT[j] * (v[j,k] - v[j,k-1])) for j in J for k in range(G[j], t - UT[j] + 1)))
-    model.addConstrs(gp.quicksum(v[j,n] - (v[j,k] - v[j,k-1]) for n in range(k, t+1)) >= 0 for j in J for k in range(t - UT[j] + 1, t))
+    model.addConstrs(pmax[j,k] <= p[j,k-1] + RU[j] * v[j,k-1] + SU[j] * (v[j,k] - v[j,k-1]) + Pmax[j] * (1 - v[j,k]) for j in J for k in K[1:]) # (18)
+    model.addConstrs(pmax[j,0] <= p0[j] + RU[j] * V0[j] + SU[j] * (v[j,0] - V0[j]) + Pmax[j] * (1 - v[j,0])for j in J)
+    model.addConstrs(pmax[j,k] <= Pmax[j] * v[j,k+1] + SD[j] * (v[j,k] - v[j,k+1]) for j in J for k in K[:-1]) # (19)
+    model.addConstrs(p[j,k-1] - p[j,k] <= RD[j] * v[j,k] + SD[j] * (v[j,k-1] - v[j,k]) + Pmax[j] * (1 - v[j,k-1]) for j in J for k in K[1:]) # (20)
+    model.addConstrs(p0[j] - p[j,0] <= RD[j] * v[j,0] + SD[j] * (V0[j] - v[j,0]) + Pmax[j] * (1 - V0[j]) for j in J)
+    # Minimum Up and Down time Constraints 384(3872) + 384(4256)
+    # Minimum Up time Constrains
+    model.addConstrs(gp.quicksum(1 - v[j,k] for k in range(G[j])) == 0 for j in J if G[j] != 0) # (21)
+    for j in J: # (22)
+        model.addConstrs((gp.quicksum(v[j,n] for n in range(k, k + UT[j])) >= UT[j] * (v[j,k] - v[j,k-1]) for k in range(G[j] + 1, t - UT[j] + 1)))
+        if (G[j] != 0):
+            model.addConstrs((gp.quicksum(v[j,n] for n in range(k, k + UT[j])) >= UT[j] * (v[j,k] - v[j,k-1]) for k in range(G[j], G[j] + 1)))
+        else:
+            model.addConstrs((gp.quicksum(v[j,n] for n in range(k, k + UT[j])) >= UT[j] * (v[j,k] - V0[j]) for k in range(G[j], G[j] + 1)))
+    model.addConstrs(gp.quicksum(v[j,n] - (v[j,k] - v[j,k-1]) for n in range(k, t)) >= 0 for j in J for k in range(t - UT[j] + 1, t)) # (23)
+    # Minimum Down time Constraints
+    model.addConstrs(gp.quicksum(v[j,k] for k in range(L[j])) == 0 for j in J if L[j] != 0) # (24)
+    for j in J: # (25)
+        model.addConstrs((gp.quicksum((1 - v[j,n]) for n in range(k, k + DT[j])) >= DT[j] * (v[j,k-1] - v[j,k]) for k in range(L[j] + 1, t - DT[j] + 1)))
+        if (L[j] != 0):
+            model.addConstrs((gp.quicksum((1 - v[j,n]) for n in range(k, k + DT[j])) >= DT[j] * (v[j,k - 1] - v[j,k]) for k in range(L[j], L[j] + 1)))
+        else:
+            model.addConstrs((gp.quicksum((1 - v[j,n]) for n in range(k, k + DT[j])) >= DT[j] * (V0[j] - v[j,k]) for k in range(L[j], L[j] + 1)))
+    model.addConstrs(gp.quicksum(1 - v[j,n] - (v[j,k-1] - v[j,k]) for n in range(k, t)) >= 0 for j in J for k in range(t - DT[j] + 1, t)) # (26)
 
 def add_constr_sys(var):
     # 读取变量
@@ -186,7 +202,7 @@ def add_constr_sys(var):
     # power balance 24 (3464)
     model.addConstrs((gp.quicksum(p[j,k] for j in J) == D[k]) for k in K) # (18)
     # spinning reserve 24 (3488)
-    model.addConstrs((gp.quicksum(pmax[j,k] for j in J) >= gp.quicksum(D[k] + R[k]))for k in K) # (19)
+    model.addConstrs((gp.quicksum(pmax[j,k] for j in J) >= D[k] + R[k])for k in K) # (19)
 
 
     return 0
