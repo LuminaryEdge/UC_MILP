@@ -42,7 +42,7 @@ class Units:
         self.Pmax = self.read_col(self.Info, '最大出力(MW)')
         self.UT = self.read_col(self.Info, '最小开机时间(h)')
         self.DT = self.read_col(self.Info, '最小关机时间(h)')
-        self.tcold = self.read_col(self.Info, '冷启动时间(h)')
+        self.tcold = self.read_col(self.Info, '冷启动时间(h)') # 冷启动时间：机组从停机状态到到达最小出力所需的时间
         self.hc = self.read_col(self.Info, '热启动费用($)') 
         self.cc = self.read_col(self.Info, '冷启动费用($)') 
         self.sc = self.read_col(self.Info, '关停费用($)') 
@@ -123,15 +123,21 @@ def add_constr_objective(var):
     # 读取变量
     cd = var['cd']
     v = var['v']
+    cu = var['cu']
     J = params['J']
     K = params['K']
     C = units.sc
     V0 = units.V0
 
+
+
    # Shutdown Cost 768
-    model.addConstrs(cd[j,k] >= 0 for j in J for k in K)
-    model.addConstrs(cd[j,k] >= C[j]*(v[j,k-1]-v[j,k]) for j in J for k in K[1:]) 
+    model.addConstrs(cd[j,k] >= 0 for j in J for k in K) # (14)
+    model.addConstrs(cd[j,k] >= C[j]*(v[j,k-1]-v[j,k]) for j in J for k in K[1:]) # (15)
     model.addConstrs(cd[j,0] >= C[j]*(V0[j]-v[j,0]) for j in J)
+
+    # Star_up Cost
+    model.addConstrs(cu[j,k] >= 0 for j in J for k in K) #(12)
  
 
 def add_constr_unit(var):
