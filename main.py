@@ -132,6 +132,7 @@ def add_constr_objective(var):
     model.addConstrs(cd[j,k] >= 0 for j in J for k in K)
     model.addConstrs(cd[j,k] >= C[j]*(v[j,k-1]-v[j,k]) for j in J for k in K[1:]) 
     model.addConstrs(cd[j,0] >= C[j]*(V0[j]-v[j,0]) for j in J)
+ 
 
 def add_constr_unit(var):
     # 读取变量
