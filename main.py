@@ -119,6 +119,8 @@ def add_var():
 
     return var_dict
 
+
+
 def add_constr_objective(var):
     # 读取变量
     cd = var['cd']
@@ -126,8 +128,30 @@ def add_constr_objective(var):
     cu = var['cu']
     J = params['J']
     K = params['K']
+    t = params['time_interval']
+    u = params['unit_num']
     C = units.sc
     V0 = units.V0
+    S0 = units.S0
+    v0 = units.v0
+    tcold = units.tcold
+    DT = units.DT
+    hc = units.hc
+    cc = units.cc
+
+
+    # 定义开启费用函数分段数ND
+    ND = np.squeeze(np.full((1,u),t)) #下标存疑
+    # 定义常数字典Kc
+    Kc = {}
+    for j in J:
+        for t in K:
+            if t >= 0 and t <= tcold[j] + DT[j] - 1:
+                Kc[j,t] = hc[j]
+            elif t >= tcold[j] + DT[j] :
+                Kc[j,t] = cc[j]
+
+
 
 
 
@@ -136,8 +160,19 @@ def add_constr_objective(var):
     model.addConstrs(cd[j,k] >= C[j]*(v[j,k-1]-v[j,k]) for j in J for k in K[1:]) # (15)
     model.addConstrs(cd[j,0] >= C[j]*(V0[j]-v[j,0]) for j in J)
 
-    # Star_up Cost
-    model.addConstrs(cu[j,k] >= 0 for j in J for k in K) #(12)
+    # Star_up Cost 384(4640) + 5502(10142 涨得好快！应该是ND设得太大的原因)
+    model.addConstrs(cu[j,k] >= 0 for j in J for k in K) #(13)
+
+    for j in J:
+        for k in K:
+            for t in range(ND[j]):
+                if k - t + 1 >= 0 :
+                    model.addConstr(cu[j,k] >= Kc[j,t] * (v[j,k] - gp.quicksum(v[j,k-n] for n in range(t))))
+                else:
+                    if S0[j] >= t - k - 1:
+                        model.addConstr(cu[j,k] >= Kc[j,t] * (v[j,k] - gp.quicksum(v[j,k-n] for n in range(k+ 1))))
+
+
  
 
 def add_constr_unit(var):
@@ -241,7 +276,7 @@ def solve_UC():
 
 if __name__ == "__main__":
     # 创建units,cases实例
-    units = Units()
+    units = Units() 
     cases = Cases()
     read(r".\P4参考资料\P4-附件-IEEE-31bus数据.xls")
     # 设置params参数列表 params = {'unit_num','time_interval','J','K'}
