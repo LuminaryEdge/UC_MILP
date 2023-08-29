@@ -2,6 +2,9 @@ import gurobipy as gp
 from gurobipy import *
 import numpy as np
 import pandas as pd
+import pwlf
+from pwlf import * 
+import pickle # 用于存储变量F和T
 
 
 class Units:
@@ -96,28 +99,35 @@ def set_params():
     params['time_interval'] = k
     params['J'] = range(j)
     params['K'] = range(k)
+    params['L'] = range(units.NL[0])
 
 def add_var():
     # 创建一个空字典来储存决策变量对象
     var_dict = {}
     # shut_down_cost cd_{jk},连续变量
-    var_dict['cd'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS)
+    var_dict['cd'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS, name = 'cd')
     # production_cost cp_{jk},连续变量
-    var_dict['cp'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS)
+    var_dict['cp'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS, name = 'cp')
     # startup_cost cu_{jk},连续变量
-    var_dict['cu'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS)
+    var_dict['cu'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS, name = 'cu')
     # 机组出力p_jk,连续变量
-    var_dict['p'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS)
+    var_dict['p'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS, name = 'p')
     # 机组最大出力pmax_jk,连续变量
-    var_dict['pmax'] = model.addVars(params['unit_num'],params['time_interval'], vtype = gp.GRB.CONTINUOUS)
+    var_dict['pmax'] = model.addVars(params['unit_num'],params['time_interval'], vtype = gp.GRB.CONTINUOUS, name = 'pmax')
     # 机组开关状态v_jk,01变量
-    var_dict['v'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.BINARY)
+    var_dict['v'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.BINARY, name = 'v')
     # delta_{jkl}, 连续变量 power produced in block l of the piecewise linear production cost function of unit j in period k
-    var_dict['delta'] = model.addVars(params['unit_num'], params['time_interval'],3,vtype = gp.GRB.CONTINUOUS)
+    var_dict['delta'] = model.addVars(params['unit_num'], params['time_interval'],3,vtype = gp.GRB.CONTINUOUS, name = 'delta')
 
     model.update()
 
     return var_dict
+
+def calc_quadra(a, b, c, x):
+    return a * x**2 + b * x + c
+
+def lin_of_quadra():
+    pass
 
 
 
@@ -126,8 +136,12 @@ def add_constr_objective(var):
     cd = var['cd']
     v = var['v']
     cu = var['cu']
+    delta = var['delta']
+    p = var['p']
+    cp = var['cp']
     J = params['J']
     K = params['K']
+    L = params['L']
     t = params['time_interval']
     u = params['unit_num']
     C = units.sc
@@ -138,6 +152,12 @@ def add_constr_objective(var):
     DT = units.DT
     hc = units.hc
     cc = units.cc
+    coeff_1 = units.coeff_1
+    coeff_2 = units.coeff_2
+    coeff_3 = units.coeff_3
+    Pmin = units.Pmin
+    Pmax = units.Pmax
+    NL = units.NL[0]
 
 
     # 定义开启费用函数分段数ND
@@ -151,8 +171,30 @@ def add_constr_objective(var):
             elif t >= tcold[j] + DT[j] :
                 Kc[j,t] = cc[j]
 
+    # 定义常数数组A(cmin的集合)
+    A = calc_quadra(coeff_1, coeff_2, coeff_3, Pmin)
+    # # 利用pwlf库，已知分段数，scipy差分进化算法拟合，得到常数字典T与F
+    # T = {}
+    # F = {}
+    # for j in J:
+    #     pp = np.linspace(Pmin[j], Pmax[j], num=1000)
+    #     cc = calc_quadra(coeff_1[j], coeff_2[j], coeff_3[j], pp)
 
+    #     # 使用pwlf库进行线性拟合
+    #     my_pwlf = pwlf.PiecewiseLinFit(pp, cc)
+    #     T[j] = my_pwlf.fit(NL)
+    #     F[j] = my_pwlf.slopes
+    #     values = list(T.values())
+    #     T = np.array(values)
+    #     T = T[:,1:-1]
+    #     values = list(F.values())
+    #     F = np.array(values)
+    # with open('lin_cons.pkl','wb') as f:
+    #     pickle.dump((T, F),f)
 
+    with open('lin_cons.pkl', 'rb') as f:
+        T , F = pickle.load(f)
+    
 
 
    # Shutdown Cost 768
@@ -172,8 +214,14 @@ def add_constr_objective(var):
                     if S0[j] >= t - k - 1:
                         model.addConstr(cu[j,k] >= Kc[j,t] * (v[j,k] - gp.quicksum(v[j,k-n] for n in range(k+ 1))))
 
-
- 
+    # Production Cost 1152(11294) + 384(11678) + 384(12062) + 384(12446) + 384(12830) + 384(13214)
+    model.addConstrs(delta[j,k,l] >= 0 for j in J for k in K for l in L) # (11)
+    model.addConstrs(delta[j,k,NL-1] <= Pmax[j] - T[j][NL-2] for j in J for k in K) # (10)
+    model.addConstrs(delta[j,k,l] <= T[j][l] - T[j][l-1] for j in J for k in K for l in range(1,NL-1)) #(9)
+    model.addConstrs(delta[j,k,0] <= T[j][0] - Pmin[j] for j in J for k in K) # (8)
+    model.addConstrs(p[j,k] == gp.quicksum(delta[j,k,l] for l in L) + Pmin[j] * v[j,k] for j in J for k in K) # (7)
+    
+    model.addConstrs(cp[j,k] == A[j] * v[j,k] + gp.quicksum(F[j][l] * delta[j,k,l] for l in L) for j in J for k in K) # (6)
 
 def add_constr_unit(var):
     # 读取变量
@@ -261,7 +309,6 @@ def add_constr(var):
  
     model.update()
 
-    print(model.NumConstrs)
 
 def solve_UC():
     '''
@@ -269,9 +316,18 @@ def solve_UC():
     '''
     # 新建决策变量
     var_dict = add_var()
+    # 设定目标函数
+    cp = var_dict['cp']
+    cu = var_dict['cu']
+    cd = var_dict['cd']
+    J = params['J']
+    K = params['K']
+    model.setObjective(gp.quicksum(cp[j,k] + cu[j,k] + cd[j,k] for j in J for k in K) ,gurobipy.GRB.MINIMIZE)
     # 添加约束条件
     add_constr(var_dict)
-    
+    model.optimize()
+
+
 
 
 if __name__ == "__main__":
@@ -284,8 +340,16 @@ if __name__ == "__main__":
     set_params()
     # 创建模型，开始优化求解
     model = gp.Model('MILP_UC')
+    model.write('UC_MILP.mps')
     solve_UC()
-
+    model.write('UC_MILP_solutions.sol')
+    vars = model.getVars()
+    print("____________求解结果____________")
+    print("变量值：")
+    for i in range(0,len(vars)):
+        print(vars[i].VarName, vars[i].X)
+    print("目标函数值：", model.ObjVal)
+    pass
 
 
 
