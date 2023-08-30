@@ -5,6 +5,10 @@ import pandas as pd
 import pwlf
 from pwlf import * 
 import pickle # 用于存储变量F和T
+import os
+import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif']=['SimHei'] #用来正常显示中文标签
+plt.rcParams['axes.unicode_minus']=False #用来正常显示负号
 
 
 class Units:
@@ -103,6 +107,7 @@ def set_params():
 
 def add_var():
     # 创建一个空字典来储存决策变量对象
+    global var_dict
     var_dict = {}
     # shut_down_cost cd_{jk},连续变量
     var_dict['cd'] = model.addVars(params['unit_num'], params['time_interval'], vtype = gp.GRB.CONTINUOUS, name = 'cd')
@@ -120,6 +125,7 @@ def add_var():
     var_dict['delta'] = model.addVars(params['unit_num'], params['time_interval'],3,vtype = gp.GRB.CONTINUOUS, name = 'delta')
 
     model.update()
+
 
     return var_dict
 
@@ -327,6 +333,56 @@ def solve_UC():
     add_constr(var_dict)
     model.optimize()
 
+def data_analysis():
+    #提取参数
+    J = params['J']
+    K = params['K']
+    X = range(1,params['time_interval'] + 1)
+    p_values = model.getAttr('x', var_dict['p'])
+    p_units = []
+    p_total = []
+    p_accumulate = []
+    demand = cases.D
+
+    # set p_total
+    for k in K:
+        p_total.append(sum(p_values[j,k] for j in J))
+    # set p_units
+    for j in J:
+        p_units.append([p_values[j,k] for k in K])
+    p_accumulate.append(p_units[0])
+    for j in J[1:]:
+        p_accumulate.append([x + y for x, y in zip(p_accumulate[j-1], p_units[j])])
+
+    '''____________每一个机组的发电量____________'''
+    for i in range(params['unit_num']):
+        x = range(params['time_interval'])
+        y = [[p_values[i,j]] for j in x]
+         
+        x = range(1,params['time_interval'] + 1)
+        plt.plot(x,y,label=f"机组{i+1}")
+    plt.title("机组发电量")
+    plt.xlabel("时间(h)")
+    plt.ylabel("发电量(MW)")
+    plt.legend()
+    plt.show()
+    '''___________累计发电量_____________'''
+    for j in J:
+        plt.plot(x,p_accumulate[j],label=f"机组{j+1}累积发电量")
+    plt.title("机组累积发电量")
+    plt.xlabel("时间(h)")
+    plt.ylabel("发电量(MW)")
+    plt.legend()
+    plt.show()
+    '''___________总发电量与需求__________'''
+    plt.plot(x,p_total,linestyle='solid', color='red', marker='o',label=f"总发电量")
+    plt.plot(x,demand,linestyle='dashed', color='blue',label=f"总需求")
+    plt.title("机组总发电量与总需求关系曲线")
+    plt.xlabel("时间(h)")
+    plt.ylabel("发电量(MW)")
+    plt.legend()
+    plt.show()
+
 
 
 
@@ -343,13 +399,9 @@ if __name__ == "__main__":
     model.write('UC_MILP.mps')
     solve_UC()
     model.write('UC_MILP_solutions.sol')
-    vars = model.getVars()
-    print("____________求解结果____________")
-    print("变量值：")
-    for i in range(0,len(vars)):
-        print(vars[i].VarName, vars[i].X)
-    print("目标函数值：", model.ObjVal)
-    pass
+    # 根据数据绘制图表
+    data_analysis()
+    
 
 
 
