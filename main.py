@@ -32,6 +32,7 @@ class Units:
         self.p0 = None
         self.U0 = None
         self.S0 = None
+        self.bus = None
 
     def read_col(self, recarray, col_name):
         col = recarray[col_name]
@@ -64,10 +65,35 @@ class Units:
         self.NL = self.read_col(self.Info, '燃料费用分段数')
         self.v0 = self.read_col(self.Info, '机组初始状态')
         self.p0 = self.read_col(self.Info, '机组初始发电量')
+        self.bus = self.read_col(self.Info, '节点编号')
         self.V0 = (self.v0 > 0).astype(int)
         self.U0 = np.where(self.v0 < 0, 0, self.v0)
         self.S0 = np.where(self.v0 > 0, 0, -self.v0)
 
+class Loads:
+    def __init__(self):
+        self.bus = None
+        self.lamd = None
+        self.d = None
+    def read_col(self, recarray, col_name):
+        col = recarray[col_name]
+        return np.squeeze(col.reshape((len(col), 1)))
+    def read_data(self, file_path, sheet_name):
+        # 读入文件
+        with pd.ExcelFile(file_path) as xls:
+            df = pd.read_excel(xls, sheet_name)
+        self.Info = df.to_records(index=False)
+        # 读入参数
+        self.bus = self.read_col(self.Info, '节点编号')
+        self.lamd = self.read_col(self.Info, '负载分配系数')
+        # 处理参数 只取大于零的数
+        self.bus = self.bus[self.lamd > 0]
+        self.lamd = self.lamd[self.lamd > 0]
+        # 创建 d 二维数组，用于储存每一时刻每一负载的需求
+        self.d = np.zeros(((len(self.lamd)), len(cases.D)))
+        for i in range(len(self.lamd)):
+            for j in range(len(cases.D)):
+                self.d[i,j] = cases.D[j] * self.lamd[i]
 
 class Cases:
     def __init__(self):
@@ -88,6 +114,26 @@ class Cases:
         self.D = self.read_col(self.Info, '系统负荷')
         self.R = self.read_col(self.Info, '系统备用')
 
+class Lines:
+    def __init__(self):
+        self.F = None
+        self.begin_bus = None
+        self.end_bus = None
+
+    def read_col(self, recarray, col_name):
+        col = recarray[col_name]
+        return np.squeeze(col.reshape((len(col), 1)))
+    def read_data(self, file_path, sheet_name):
+        # 读入文件
+        with pd.ExcelFile(file_path) as xls:
+            df = pd.read_excel(xls, sheet_name)
+        self.Info = df.to_records(index=False)
+        self.F = self.read_col(self.Info, '传输线容量(MW)')
+
+def read_I(file_path):
+    df = pd.read_excel(file_path, sheet_name='Gama',index_col=0, header= 0)
+    global I
+    I = df.values
 
 def read(file_path):
     '''
@@ -95,6 +141,10 @@ def read(file_path):
     '''
     units.read_data(file_path, "Sys_ThUnitInfo")
     cases.read_data(file_path, "Case_Info")
+    lines.read_data(file_path, "Sys_Line")
+    loads.read_data(file_path, "Sys_NetInfo")
+    read_I(file_path)
+
 
 
 def set_params():
@@ -103,11 +153,15 @@ def set_params():
     '''
     j = len(units.Info)
     k = len(cases.Info)
+    n = len(lines.F)
+    m = len(loads.bus)
     params['unit_num'] = j
     params['time_interval'] = k
     params['J'] = range(j)
     params['K'] = range(k)
     params['L'] = range(units.NL[0])
+    params['N'] = range(n)
+    params['M'] = range(m)
 
 
 def add_var():
@@ -281,16 +335,16 @@ def add_constr_unit(var):
     model.addConstrs(pmax[j, k] >= 0 for j in J for k in K)  # (17)
     model.addConstrs(pmax[j, k] <= Pmax[j] * v[j, k] for j in J for k in K)
     # Ramping Constraints 384 + 368 + 384
-    model.addConstrs(pmax[j, k] <= p[j, k-1] + RU[j] * v[j, k-1] + SU[j] * (
+    model.addConstrs(pmax[j, k] <= p[j, k-1] + RU[j] * v[j, k-1] + Pmin[j] * (
         v[j, k] - v[j, k-1]) + Pmax[j] * (1 - v[j, k]) for j in J for k in K[1:])  # (18)
-    model.addConstrs(pmax[j, 0] <= p0[j] + RU[j] * V0[j] + SU[j]
-                     * (v[j, 0] - V0[j]) + Pmax[j] * (1 - v[j, 0])for j in J)
-    model.addConstrs(pmax[j, k] <= Pmax[j] * v[j, k+1] + SD[j]
-                     * (v[j, k] - v[j, k+1]) for j in J for k in K[:-1])  # (19)
-    model.addConstrs(p[j, k-1] - p[j, k] <= RD[j] * v[j, k] + SD[j] * (v[j, k-1] -
-                     v[j, k]) + Pmax[j] * (1 - v[j, k-1]) for j in J for k in K[1:])  # (20)
-    model.addConstrs(p0[j] - p[j, 0] <= RD[j] * v[j, 0] + SD[j]
-                     * (V0[j] - v[j, 0]) + Pmax[j] * (1 - V0[j]) for j in J)
+    # model.addConstrs(pmax[j, 0] <= p0[j] + RU[j] * V0[j] + SU[j]
+    #                  * (v[j, 0] - V0[j]) + Pmax[j] * (1 - v[j, 0])for j in J)
+    # model.addConstrs(pmax[j, k] <= Pmax[j] * v[j, k+1] + SD[j]
+    #                  * (v[j, k] - v[j, k+1]) for j in J for k in K[:-1])  # (19)
+    # model.addConstrs(p[j, k-1] - p[j, k] <= RD[j] * v[j, k] + SD[j] * (v[j, k-1] -
+    #                  v[j, k]) + Pmax[j] * (1 - v[j, k-1]) for j in J for k in K[1:])  # (20)
+    # model.addConstrs(p0[j] - p[j, 0] <= RD[j] * v[j, 0] + SD[j]
+    #                  * (V0[j] - v[j, 0]) + Pmax[j] * (1 - V0[j]) for j in J)
     # Minimum Up and Down time Constraints 384(3872) + 384(4256)
     # Minimum Up time Constrains
     model.addConstrs(gp.quicksum(
@@ -339,6 +393,20 @@ def add_constr_sys(var):
 
     return 0
 
+def add_constr_opf(var):
+    p = var['p']
+    J = params['J']
+    K = params['K']
+    M = params['M']
+    N = params['N']
+    I
+    model.addConstrs(
+        (gp.quicksum(I[n, units.bus[j] - 1] * p[j,k] for j in J) - gp.quicksum(I[n, loads.bus[m] - 1] * loads.d[m, k] for m in M) >= -lines.F[n]) for n in N for k in K
+    )
+
+    model.addConstrs(
+        (gp.quicksum(I[n, units.bus[j] - 1] * p[j,k] for j in J) - gp.quicksum(I[n, loads.bus[m] - 1] * loads.d[m, k] for m in M) <= lines.F[n]) for n in N for k in K
+    )
 
 def add_constr(var):
 
@@ -350,6 +418,10 @@ def add_constr(var):
 
     # 添加与机组整体有关的约束
     add_constr_sys(var)
+
+    # 添加与OPF有关的约束
+
+    add_constr_opf(var)
 
     model.update()
 
@@ -370,6 +442,8 @@ def solve_UC():
         cp[j, k] + cu[j, k] + cd[j, k] for j in J for k in K), gurobipy.GRB.MINIMIZE)
     # 添加约束条件
     add_constr(var_dict)
+    num_constraints = len(model.getConstrs())
+    print("Number of constraints:", num_constraints)
     model.optimize()
 
 
@@ -427,9 +501,11 @@ def data_analysis():
 
 
 if __name__ == "__main__":
-    # 创建units,cases实例
+    # 创建units,cases,lines实例
     units = Units()
+    loads = Loads()
     cases = Cases()
+    lines = Lines()
     read(r".\P4参考资料\P4-附件-IEEE-31bus数据.xls")
     # 设置params参数列表 params = {'unit_num','time_interval','J','K'}
     params = {}
