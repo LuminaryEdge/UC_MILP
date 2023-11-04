@@ -231,17 +231,23 @@ def add_constr_objective(var):
     Pmax = units.Pmax
     NL = units.NL[0]
 
-    # 定义开启费用函数分段数ND
+    # 定义燃料费用函数分段数ND
     ND = np.squeeze(np.full((1, u), t))  # 下标存疑
     # 定义常数字典Kc
     Kc = {}
+    '''
     for j in J:
         for t in K:
             if t >= 0 and t <= tcold[j] + DT[j] - 1:
                 Kc[j, t] = hc[j]
             elif t >= tcold[j] + DT[j]:
                 Kc[j, t] = cc[j]
-
+    '''
+    # 只计算热启动
+    for j in J:
+        for k in K:
+            Kc[j,t] = hc[j]
+    
     # 定义常数数组A(cmin的集合)
     A = calc_quadra(coeff_1, coeff_2, coeff_3, Pmin)
     # # 利用pwlf库，已知分段数，scipy差分进化算法拟合，得到常数字典T与F
@@ -263,29 +269,17 @@ def add_constr_objective(var):
     # with open('lin_cons.pkl','wb') as f:
     #     pickle.dump((T, F),f)
 
-    with open('lin_cons.pkl', 'rb') as f:
+    with open(r"D:\学习资料\科研\Unit Commitment\P4\lin_cons.pkl", 'rb') as f:
         T, F = pickle.load(f)
 
-   # Shutdown Cost 768
-    model.addConstrs(cd[j, k] >= 0 for j in J for k in K)  # (14)
-    model.addConstrs(cd[j, k] >= C[j]*(v[j, k-1]-v[j, k])
-                     for j in J for k in K[1:])  # (15)
-    model.addConstrs(cd[j, 0] >= C[j]*(V0[j]-v[j, 0]) for j in J)
 
-    # Star_up Cost 384(4640) + 5502(10142 涨得好快！应该是ND设得太大的原因)
+    # Star_up Cost 
+
     model.addConstrs(cu[j, k] >= 0 for j in J for k in K)  # (13)
-
-    for j in J:
-        for k in K:
-            for t in range(ND[j]):
-                if k - t + 1 >= 0:
-                    model.addConstr(
-                        cu[j, k] >= Kc[j, t] * (v[j, k] - gp.quicksum(v[j, k-n] for n in range(t))))
-                else:
-                    if S0[j] >= t - k - 1:
-                        model.addConstr(
-                            cu[j, k] >= Kc[j, t] * (v[j, k] - gp.quicksum(v[j, k-n] for n in range(k + 1))))
-
+    model.addConstrs(cu[j, k] >= hc[j]*(v[j, k]-v[j, k-1])
+                     for j in J for k in K[1:])  # (15)
+    model.addConstrs(cu[j, 0] >= hc[j]*(v[j, 0]-V0[j]) for j in J)
+    
     # Production Cost 1152(11294) + 384(11678) + 384(12062) + 384(12446) + 384(12830) + 384(13214)
     model.addConstrs(delta[j, k, l] >=
                      0 for j in J for k in K for l in L)  # (11)
@@ -335,16 +329,10 @@ def add_constr_unit(var):
     model.addConstrs(pmax[j, k] >= 0 for j in J for k in K)  # (17)
     model.addConstrs(pmax[j, k] <= Pmax[j] * v[j, k] for j in J for k in K)
     # Ramping Constraints 384 + 368 + 384
-    model.addConstrs(pmax[j, k] <= p[j, k-1] + RU[j] * v[j, k-1] + Pmin[j] * (
-        v[j, k] - v[j, k-1]) + Pmax[j] * (1 - v[j, k]) for j in J for k in K[1:])  # (18)
-    # model.addConstrs(pmax[j, 0] <= p0[j] + RU[j] * V0[j] + SU[j]
-    #                  * (v[j, 0] - V0[j]) + Pmax[j] * (1 - v[j, 0])for j in J)
-    # model.addConstrs(pmax[j, k] <= Pmax[j] * v[j, k+1] + SD[j]
-    #                  * (v[j, k] - v[j, k+1]) for j in J for k in K[:-1])  # (19)
-    # model.addConstrs(p[j, k-1] - p[j, k] <= RD[j] * v[j, k] + SD[j] * (v[j, k-1] -
-    #                  v[j, k]) + Pmax[j] * (1 - v[j, k-1]) for j in J for k in K[1:])  # (20)
-    # model.addConstrs(p0[j] - p[j, 0] <= RD[j] * v[j, 0] + SD[j]
-    #                  * (V0[j] - v[j, 0]) + Pmax[j] * (1 - V0[j]) for j in J)
+    model.addConstrs(pmax[j, k] <= p[j, k-1] + RU[j] * v[j, k-1] + SU[j] * (
+        v[j, k] - v[j, k-1]) + Pmax[j] * (1 - v[j, k]) for j in J for k in K[1:])  
+    model.addConstrs(pmax[j, 0] <= p0[j] + RU[j] * V0[j] + SU[j] * (v[j,0] - V0[j]) + Pmax[j] * (1 - v[j,0]) for j in J) # (18)
+
     # Minimum Up and Down time Constraints 384(3872) + 384(4256)
     # Minimum Up time Constrains
     model.addConstrs(gp.quicksum(
@@ -399,7 +387,7 @@ def add_constr_opf(var):
     K = params['K']
     M = params['M']
     N = params['N']
-    I
+    
     model.addConstrs(
         (gp.quicksum(I[n, units.bus[j] - 1] * p[j,k] for j in J) - gp.quicksum(I[n, loads.bus[m] - 1] * loads.d[m, k] for m in M) >= -lines.F[n]) for n in N for k in K
     )
@@ -438,8 +426,9 @@ def solve_UC():
     cd = var_dict['cd']
     J = params['J']
     K = params['K']
+    # 设置目标函数，去除了关机费用
     model.setObjective(gp.quicksum(
-        cp[j, k] + cu[j, k] + cd[j, k] for j in J for k in K), gurobipy.GRB.MINIMIZE)
+        cp[j, k] + cu[j, k] for j in J for k in K), gurobipy.GRB.MINIMIZE)
     # 添加约束条件
     add_constr(var_dict)
     num_constraints = len(model.getConstrs())
@@ -506,7 +495,7 @@ if __name__ == "__main__":
     loads = Loads()
     cases = Cases()
     lines = Lines()
-    read(r".\P4参考资料\P4-附件-IEEE-31bus数据.xls")
+    read(r"D:\学习资料\科研\Unit Commitment\P4\P4参考资料\P4-附件-IEEE-31bus数据.xls")
     # 设置params参数列表 params = {'unit_num','time_interval','J','K'}
     params = {}
     set_params()
