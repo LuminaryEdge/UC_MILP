@@ -343,7 +343,6 @@ def add_constr_sys(var):
     model.addConstrs(
         (gp.quicksum(pmax[j, k] for j in J) >= D[k] + R[k])for k in K)  # (19)
 
-    return 0
 
 def add_constr_opf(var):
     p = var['p']
