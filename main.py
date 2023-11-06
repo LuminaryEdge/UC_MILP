@@ -56,7 +56,7 @@ class Units:
         self.cc = self.read_col(self.Info, '冷启动费用($)')
         self.sc = self.read_col(self.Info, '关停费用($)')
         self.RU = self.read_col(self.Info, '爬升速率(MW/h)')  # 过程中的爬升速率
-        self.SU = self.read_col(self.Info, '爬升速率(MW/h)')  # 开启时的爬升速率
+        self.SU = self.read_col(self.Info, '最小出力(MW)')  # 开启时的爬升速率
         self.SD = self.read_col(self.Info, '爬升速率(MW/h)')  # 关停时的下坡速率
         self.RD = self.read_col(self.Info, '爬升速率(MW/h)')  # 过程中的下坡速率
         self.coeff_1 = self.read_col(self.Info, '燃料费用曲线二次项系数')
@@ -199,9 +199,6 @@ def calc_quadra(a, b, c, x):
     return a * x**2 + b * x + c
 
 
-def lin_of_quadra():
-    pass
-
 
 def add_constr_objective(var):
     # 读取变量
@@ -235,14 +232,6 @@ def add_constr_objective(var):
     ND = np.squeeze(np.full((1, u), t))  # 下标存疑
     # 定义常数字典Kc
     Kc = {}
-    '''
-    for j in J:
-        for t in K:
-            if t >= 0 and t <= tcold[j] + DT[j] - 1:
-                Kc[j, t] = hc[j]
-            elif t >= tcold[j] + DT[j]:
-                Kc[j, t] = cc[j]
-    '''
     # 只计算热启动
     for j in J:
         for k in K:
@@ -250,28 +239,23 @@ def add_constr_objective(var):
     
     # 定义常数数组A(cmin的集合)
     A = calc_quadra(coeff_1, coeff_2, coeff_3, Pmin)
-    # # 利用pwlf库，已知分段数，scipy差分进化算法拟合，得到常数字典T与F
-    # T = {}
-    # F = {}
-    # for j in J:
-    #     pp = np.linspace(Pmin[j], Pmax[j], num=1000)
-    #     cc = calc_quadra(coeff_1[j], coeff_2[j], coeff_3[j], pp)
 
-    #     # 使用pwlf库进行线性拟合
-    #     my_pwlf = pwlf.PiecewiseLinFit(pp, cc)
-    #     T[j] = my_pwlf.fit(NL)
-    #     F[j] = my_pwlf.slopes
-    #     values = list(T.values())
-    #     T = np.array(values)
-    #     T = T[:,1:-1]
-    #     values = list(F.values())
-    #     F = np.array(values)
-    # with open('lin_cons.pkl','wb') as f:
-    #     pickle.dump((T, F),f)
-
-    with open(r"D:\学习资料\科研\Unit Commitment\P4\lin_cons.pkl", 'rb') as f:
-        T, F = pickle.load(f)
-
+    F=[[10.151950020000989, 11.152000000000006, 12.152049979999006],
+         [9.445936025601256, 10.72599999999999, 12.006063974398694],
+         [9.445936025601256, 10.72599999999999, 12.006063974398694],
+         [9.445936025601256, 10.72599999999999, 12.006063974398694],
+         [7.481935026001293, 8.781999999999996, 10.082064973998701],
+         [7.481935026001293, 8.781999999999996, 10.082064973998701],
+         [10.191960016000797, 10.992000000000003, 11.792039983999208],
+         [9.451975010000446, 9.952, 10.452024989999499],
+         [9.301975010000472, 9.802000000000012, 10.302024989999504],
+         [12.805990503800203, 12.995999999999995, 13.186009496199794],
+         [12.123982007200347, 12.484000000000002, 12.84401799279964],
+         [10.290966013600665, 10.970999999999993, 11.651033986399316],
+         [9.176962515000756, 9.926999999999992, 10.677037484999238],
+         [13.308422254433555, 13.530099999999996, 13.751777745566454],
+         [14.955988004800243, 15.195999999999998, 15.436011995199756],
+         [10.290966013600665, 10.970999999999993, 11.651033986399316]]
 
     # Star_up Cost 
 
@@ -283,17 +267,13 @@ def add_constr_objective(var):
     # Production Cost 1152(11294) + 384(11678) + 384(12062) + 384(12446) + 384(12830) + 384(13214)
     model.addConstrs(delta[j, k, l] >=
                      0 for j in J for k in K for l in L)  # (11)
-    model.addConstrs(delta[j, k, NL-1] <= Pmax[j] - T[j][NL-2]
-                     for j in J for k in K)  # (10)
-    model.addConstrs(delta[j, k, l] <= T[j][l] - T[j][l-1]
-                     for j in J for k in K for l in range(1, NL-1))  # (9)
-    model.addConstrs(delta[j, k, 0] <= T[j][0] - Pmin[j]
-                     for j in J for k in K)  # (8)
+
+    model.addConstrs(delta[j,k,l] <= (Pmax[j]-Pmin[j])/NL for j in J for k in K for l in range(NL)) #(8)(9)(10)
+
     model.addConstrs(p[j, k] == gp.quicksum(delta[j, k, l]
                      for l in L) + Pmin[j] * v[j, k] for j in J for k in K)  # (7)
 
-    model.addConstrs(cp[j, k] == A[j] * v[j, k] + gp.quicksum(F[j]
-                     [l] * delta[j, k, l] for l in L) for j in J for k in K)  # (6)
+    model.addConstrs(cp[j, k] == A[j] * v[j, k] + gp.quicksum(F[j][l] * delta[j, k, l] for l in L) for j in J for k in K)  # (6)
 
 
 def add_constr_unit(var):
@@ -333,35 +313,19 @@ def add_constr_unit(var):
         v[j, k] - v[j, k-1]) + Pmax[j] * (1 - v[j, k]) for j in J for k in K[1:])  
     model.addConstrs(pmax[j, 0] <= p0[j] + RU[j] * V0[j] + SU[j] * (v[j,0] - V0[j]) + Pmax[j] * (1 - v[j,0]) for j in J) # (18)
 
-    # Minimum Up and Down time Constraints 384(3872) + 384(4256)
-    # Minimum Up time Constrains
+    # Minimum Up and Down time Constraints
+
+    # Minimum Up time Constrains (21-23)
     model.addConstrs(gp.quicksum(
-        1 - v[j, k] for k in range(G[j])) == 0 for j in J if G[j] != 0)  # (21)
-    for j in J:  # (22)
-        model.addConstrs((gp.quicksum(v[j, n] for n in range(
-            k, k + UT[j])) >= UT[j] * (v[j, k] - v[j, k-1]) for k in range(G[j] + 1, t - UT[j] + 1)))
-        if (G[j] != 0):
-            model.addConstrs((gp.quicksum(v[j, n] for n in range(
-                k, k + UT[j])) >= UT[j] * (v[j, k] - v[j, k-1]) for k in range(G[j], G[j] + 1)))
-        else:
-            model.addConstrs((gp.quicksum(v[j, n] for n in range(
-                k, k + UT[j])) >= UT[j] * (v[j, k] - V0[j]) for k in range(G[j], G[j] + 1)))
-    model.addConstrs(gp.quicksum(v[j, n] - (v[j, k] - v[j, k-1]) for n in range(
-        k, t)) >= 0 for j in J for k in range(t - UT[j] + 1, t))  # (23)
-    # Minimum Down time Constraints
-    model.addConstrs(gp.quicksum(v[j, k] for k in range(
-        L[j])) == 0 for j in J if L[j] != 0)  # (24)
-    for j in J:  # (25)
-        model.addConstrs((gp.quicksum((1 - v[j, n]) for n in range(k, k + DT[j])) >= DT[j] * (
-            v[j, k-1] - v[j, k]) for k in range(L[j] + 1, t - DT[j] + 1)))
-        if (L[j] != 0):
-            model.addConstrs((gp.quicksum((1 - v[j, n]) for n in range(k, k + DT[j])) >= DT[j] * (
-                v[j, k - 1] - v[j, k]) for k in range(L[j], L[j] + 1)))
-        else:
-            model.addConstrs((gp.quicksum((1 - v[j, n]) for n in range(
-                k, k + DT[j])) >= DT[j] * (V0[j] - v[j, k]) for k in range(L[j], L[j] + 1)))
-    model.addConstrs(gp.quicksum(1 - v[j, n] - (v[j, k-1] - v[j, k]) for n in range(
-        k, t)) >= 0 for j in J for k in range(t - DT[j] + 1, t))  # (26)
+        1 - v[j, k] for k in range(G[j])) == 0 for j in J)  # (21)
+    model.addConstrs(gp.quicksum(v[j,n] for n in range(UT[j]- 1 + 1)) >= UT[j] * (v[j,0] - V0[j]) for j in J)
+    model.addConstrs(gp.quicksum(v[j,n] for n in range(k,k+UT[j]- 1 + 1)) >= UT[j] * (v[j, k] - v[j, k-1]) for j in J for k in range(G[j], t - UT[j] + 1) if k > 0)
+    model.addConstrs(gp.quicksum(v[j,n] - (v[j,k] - v[j,k-1]) for n in range(k,t)) >= 0 for j in J for k in range(t-UT[j]+1,t))
+    # Minimum Down time Constraints (24-26)
+    model.addConstrs(gp.quicksum(v[j, k] for k in range(L[j])) == 0 for j in J)  # (21)
+    model.addConstrs(gp.quicksum((1-v[j,n]) for n in range(DT[j]- 1 + 1)) >= DT[j] * (-v[j,0] + V0[j]) for j in J)
+    model.addConstrs(gp.quicksum((1-v[j,n]) for n in range(k,k+DT[j]- 1 + 1)) >= DT[j] * (- v[j, k] + v[j, k-1]) for j in J for k in range(L[j], t - DT[j] + 1) if k > 0)
+    model.addConstrs(gp.quicksum(1 - v[j,n] - (-v[j,k] + v[j,k-1]) for n in range(k,t)) >= 0 for j in J for k in range(t-DT[j]+1,t))
 
 
 def add_constr_sys(var):
